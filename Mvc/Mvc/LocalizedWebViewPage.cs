@@ -9,6 +9,7 @@ using System.Web.UI;
 
 using Knoema.Localization;
 using Knoema.Localization.Web;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Knoema.Localization.Mvc
 {
@@ -16,36 +17,22 @@ namespace Knoema.Localization.Mvc
 	{
 		public string R(string text, params object[] formatterArguments)
 		{
-			var translation = Translate(text);
+			return this.Translate(text, formatterArguments: formatterArguments);
+		}
 
-			if (formatterArguments.Length == 0)
-				return translation;
-
-			return formatterArguments.Length == 1 ? translation.FormatWith(formatterArguments[0]) : string.Format(translation, formatterArguments);
+		public string R(string text, CultureInfo culture, params object[] formatterArguments)
+		{
+			return this.Translate(text, culture, formatterArguments);
 		}
 
 		public HtmlString R2(string text, params object[] formatterArguments)
 		{
-			var translation = Translate(text, true);
-
-			if (formatterArguments.Length == 1)
-				translation = translation.FormatWith(formatterArguments[0]);
-			else if (formatterArguments.Length > 1)
-				translation = string.Format(translation, formatterArguments);
-
-			return new HtmlString(translation.ParseMarkup());
+			return this.TranslateMarkup(text, formatterArguments: formatterArguments);
 		}
 
-		private string Translate(string text, bool parseMarkup = false)
+		public HtmlString R2(string text, CultureInfo culture, params object[] formatterArguments)
 		{
-			if (CultureInfo.CurrentCulture.IsDefault())
-				return text;
-
-			if (LocalizationManager.Repository == null)
-				return text;
-
-			var translation = LocalizationManager.Instance.Translate(VirtualPath, text);
-			return string.IsNullOrEmpty(translation) ? text : translation;
+			return this.TranslateMarkup(text, culture, formatterArguments);
 		}
 
 		public MvcHtmlString RenderLocalizationIncludes(bool admin)
@@ -54,11 +41,59 @@ namespace Knoema.Localization.Mvc
 		}
 	}
 
-	public abstract class LocalizedWebViewPage<TModel> : WebViewPage<TModel>
+	public abstract class LocalizedWebViewPage<TModel> : LocalizedWebViewPage
 	{
-		public string R(string text, params object[] formatterArguments)
+		private ViewDataDictionary<TModel> _viewData;
+
+		public new AjaxHelper<TModel> Ajax { get; set; }
+
+		public new HtmlHelper<TModel> Html { get; set; }
+
+		public new TModel Model
 		{
-			var translation = Translate(text);
+			get
+			{ 
+				return ViewData.Model;
+			}
+		}
+
+		[SuppressMessage("Microsoft.Usage", "CA2227:CollectionPropertiesShouldBeReadOnly", Justification = "This is the mechanism by which the ViewPage gets its ViewDataDictionary object.")]
+		public new ViewDataDictionary<TModel> ViewData
+		{
+			get
+			{
+				if (_viewData == null)				
+					SetViewData(new ViewDataDictionary<TModel>());				
+
+				return _viewData;
+			}
+			set 
+			{ 
+				SetViewData(value); 
+			}
+		}
+
+		public override void InitHelpers()
+		{
+			base.InitHelpers();
+
+			Ajax = new AjaxHelper<TModel>(ViewContext, this);
+			Html = new HtmlHelper<TModel>(ViewContext, this);
+		}
+
+		protected override void SetViewData(ViewDataDictionary viewData)
+		{
+			_viewData = new ViewDataDictionary<TModel>(viewData);
+
+			base.SetViewData(_viewData);
+		}
+	}
+
+	internal static class WebViewPageExtensions
+	{
+		internal static string Translate(this WebViewPage page, string text, CultureInfo culture = null, params object[] formatterArguments)
+		{
+			var translation = Translate(page.VirtualPath, text, culture: culture);
 
 			if (formatterArguments.Length == 0)
 				return translation;
@@ -66,9 +101,9 @@ namespace Knoema.Localization.Mvc
 			return formatterArguments.Length == 1 ? translation.FormatWith(formatterArguments[0]) : string.Format(translation, formatterArguments);
 		}
 
-		public HtmlString R2(string text, params object[] formatterArguments)
+		internal static HtmlString TranslateMarkup(this WebViewPage page, string text, CultureInfo culture = null, params object[] formatterArguments)
 		{
-			var translation = Translate(text, true);
+			var translation = Translate(page.VirtualPath, text, true, culture);
 
 			if (formatterArguments.Length == 1)
 				translation = translation.FormatWith(formatterArguments[0]);
@@ -78,21 +113,22 @@ namespace Knoema.Localization.Mvc
 			return new HtmlString(translation.ParseMarkup());
 		}
 
-		private string Translate(string text, bool parseMarkup = false)
+		private static string Translate(string virtualPath, string text, bool parseMarkup = false, CultureInfo culture = null)
 		{
-			if (CultureInfo.CurrentCulture.IsDefault())
+			LocalizationManager.Instance.InsertScope(VirtualPathUtility.ToAppRelative(virtualPath).ToLowerInvariant());
+
+			if (culture == null)
+				culture = CultureInfo.CurrentCulture;
+
+			if (culture.IsDefault())
 				return text;
 
 			if (LocalizationManager.Repository == null)
 				return text;
 
-			var translation = LocalizationManager.Instance.Translate(VirtualPath, text);
-			return string.IsNullOrEmpty(translation) ? text : translation;
-		}
+			var translation = LocalizationManager.Instance.Translate(virtualPath, text, culture: culture);
 
-		public MvcHtmlString RenderLocalizationIncludes(bool admin)
-		{
-			return MvcHtmlString.Create(LocalizationHandler.RenderIncludes(admin, LocalizationManager.Instance.GetScope()));
+			return string.IsNullOrEmpty(translation) ? text : translation;
 		}
 	}
 

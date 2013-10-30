@@ -30,7 +30,7 @@ namespace Knoema.Localization
 
 		private LocalizationManager() { }
 
-		public string Translate(string scope, string text)
+		public string Translate(string scope, string text, bool readOnly = false, CultureInfo culture = null)
 		{
 			if (string.IsNullOrEmpty(scope))
 				throw new ArgumentNullException("Scope cannot be null.");
@@ -38,15 +38,21 @@ namespace Knoema.Localization
 			if (string.IsNullOrEmpty(text))
 				throw new ArgumentNullException("Text cannot be null.");
 
+			if (culture == null)
+				culture = CultureInfo.CurrentCulture;
+
 			var cultures = GetCultures().ToList();
 
-			if (cultures.Count > 0 && !cultures.Contains(CultureInfo.CurrentCulture))
+			if (cultures.Count > 0 && !cultures.Contains(culture))
 				return null;
 
 			var hash = GetHash(scope.ToLowerInvariant() + text);
 
 			// get object from cache...
-			var obj = GetLocalizedObject(CultureInfo.CurrentCulture, hash);
+			var obj = GetLocalizedObject(culture, hash);
+
+			if (readOnly && obj == null)
+				return null;
 
 			// if null save object to db for all cultures 
 			if (obj == null)
@@ -54,20 +60,42 @@ namespace Knoema.Localization
 				if (!cultures.Contains(DefaultCulture.Value))
 					cultures.Add(DefaultCulture.Value);
 
-				foreach (var culture in cultures)
-				{
+				foreach (var c in cultures)
 					lock (_lock)
 					{
-						var stored = GetLocalizedObject(culture, hash);
+						var stored = GetLocalizedObject(c, hash);
 						if (stored == null)
-							Save(Create(hash, culture.LCID, scope, text));
+							Save(Create(hash, c.LCID, scope, text));
 					}
-				}
 			}
 			else
 				return obj.IsDisabled() ? null : obj.Translation;
 
 			return null;
+		}
+
+		public void AddTranslatinsForCurrentCulture(string scope, IEnumerable<string> phrases)
+		{
+			if (string.IsNullOrEmpty(scope))
+				throw new ArgumentNullException("Scope cannot be null.");
+
+			if (phrases == null || !phrases.Any())
+				throw new ArgumentNullException("Phrases cannot be null or empty.");
+
+			var lowerScope = scope.ToLowerInvariant();
+			var import = new List<ILocalizedObject>();
+			var toAdd = phrases.Distinct();
+
+			foreach (var phrase in toAdd)
+			{
+				var hash = GetHash(lowerScope + phrase);
+				var obj = GetLocalizedObject(CultureInfo.CurrentCulture, hash);
+
+				if (obj == null)
+					import.Add(Create(hash, CultureInfo.CurrentCulture.LCID, scope, phrase));
+			}
+
+			Save(import.ToArray());
 		}
 
 		public void CreateCulture(CultureInfo culture)
@@ -98,9 +126,6 @@ namespace Knoema.Localization
 
 		public ILocalizedObject Get(int key, bool ignoreDisabled = false)
 		{
-			if(!LocalizationCache.Available)
-				return Repository.Get(key);
-
 			var obj = LocalizationCache.Get<ILocalizedObject>(key.ToString());
 			if (obj == null)
 			{
@@ -131,9 +156,6 @@ namespace Knoema.Localization
 
 		public IEnumerable<ILocalizedObject> GetAll(CultureInfo culture)
 		{
-			if(!LocalizationCache.Available)
-				return Repository.GetAll(culture).ToList();
-
 			var lst = LocalizationCache.Get<IEnumerable<ILocalizedObject>>(culture.Name);
 			if (lst == null || lst.Count() == 0)
 			{
@@ -146,9 +168,6 @@ namespace Knoema.Localization
 
 		public IEnumerable<CultureInfo> GetCultures()
 		{
-			if(!LocalizationCache.Available)
-				return Repository.GetCultures().ToList();
-
 			var lst = LocalizationCache.Get<IEnumerable<CultureInfo>>("cultures");
 			if (lst == null || lst.Count() == 0)
 			{
@@ -162,8 +181,7 @@ namespace Knoema.Localization
 		public void Delete(params ILocalizedObject[] list)
 		{
 			Repository.Delete(list);
-			if (LocalizationCache.Available)
-				LocalizationCache.Clear();
+			LocalizationCache.Clear();
 		}
 
 		public void ClearDB(CultureInfo culture = null)
@@ -188,15 +206,13 @@ namespace Knoema.Localization
 				obj.Disable();
 
 			Repository.Save(list);
-			if (LocalizationCache.Available)
-				LocalizationCache.Clear();
+			LocalizationCache.Clear();
 		}
 
 		public void Save(params ILocalizedObject[] list)
 		{
 			Repository.Save(list);
-			if (LocalizationCache.Available)
-				LocalizationCache.Clear();
+			LocalizationCache.Clear();
 		}
 
 		public void Import(params ILocalizedObject[] list)
